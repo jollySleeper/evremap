@@ -29,11 +29,6 @@ jobs:
       - name: Build x86_64-unknown-linux-gnu
         run: cargo build --verbose --release --target x86_64-unknown-linux-gnu
 
-      - name: Build x86_64-unknown-linux-musl
-        run: |
-          rustup target add x86_64-unknown-linux-musl
-          cargo build --verbose --release --target x86_64-unknown-linux-musl
-
       - name: Build aarch64-unknown-linux-gnu
         run: |
           sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
@@ -61,17 +56,6 @@ jobs:
           upload_url: ${{ steps.create-release.outputs.upload_url }}
           asset_path: target/x86_64-unknown-linux-gnu/release/evremap
           asset_name: evremap-x86_64-unknown-linux-gnu
-          asset_content_type: application/raw
-
-      - name: Upload musl binary to GitHub release
-        id: upload-x86_64-unknown-linux-musl-release-asset
-        uses: actions/upload-release-asset@v1.0.1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create-release.outputs.upload_url }}
-          asset_path: target/x86_64-unknown-linux-musl/release/evremap
-          asset_name: evremap-x86_64-unknown-linux-musl
           asset_content_type: application/raw
 
       - name: Upload aarch64 linux binary to GitHub release
