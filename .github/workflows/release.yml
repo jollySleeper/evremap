@@ -1,4 +1,4 @@
-name: Create Releases
+name: Create Releases And Publish
 
 on:
   push:
@@ -21,7 +21,7 @@ jobs:
       - name: Install Linux Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libevdev-dev
+          sudo apt-get install -y libevdev-dev pkg-config
 
       - name: Run tests
         run: cargo test --verbose
