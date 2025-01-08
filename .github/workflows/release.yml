@@ -2,8 +2,8 @@ name: Create Releases And Publish
 
 on:
   push:
-    branches:
-      - 'workflow'
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 jobs:
