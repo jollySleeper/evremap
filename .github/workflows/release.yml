@@ -47,7 +47,7 @@ jobs:
       - name: Build all targets
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: true
-          RUSTFLAGS: "-C opt-level=3 -C lto=thin"
+          RUSTFLAGS: "-C opt-level=3 -C embed-bitcode=yes"
         run: |
           # Build GNU targets
           cargo build --verbose --release --target x86_64-unknown-linux-gnu --jobs $(nproc)
