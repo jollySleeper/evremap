@@ -22,7 +22,16 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           release_name: Release ${{ github.ref_name }}
-          body: ''
+          body: |
+            ## evremap ${{ github.ref_name }}
+            
+            ### Available Builds:
+            - x86_64 Linux (GNU libc)
+            - aarch64 Linux (GNU libc)
+            - x86_64 Linux (MUSL, static)
+            - aarch64 Linux (MUSL, static)
+            
+            Source code is available in both .tar.gz and .zip formats.
           draft: false
           prerelease: false
 
@@ -37,6 +46,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Calculate cache key
+        id: cache_key
+        run: echo "key=$(md5sum Cargo.lock | awk '{print $1}')" >> $GITHUB_OUTPUT
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -46,7 +59,7 @@ jobs:
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "release-build-gnu"
+          shared-key: "release-build-gnu-${{ steps.cache_key.outputs.key }}"
           cache-on-failure: true
 
       - name: Install Linux Dependencies
@@ -60,7 +73,7 @@ jobs:
       - name: Build and test GNU targets
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: true
-          RUSTFLAGS: "-C opt-level=3 -C embed-bitcode=yes"
+          RUSTFLAGS: "-C opt-level=3 -C embed-bitcode=yes -C target-cpu=native"
         run: |
           # Run tests on native target
           cargo test --verbose --release --all-features --jobs $(nproc)
@@ -74,66 +87,73 @@ jobs:
           strip target/x86_64-unknown-linux-gnu/release/evremap
           aarch64-linux-gnu-strip target/aarch64-unknown-linux-gnu/release/evremap
 
-      - name: Upload GNU binaries
+      - name: Upload binaries
         uses: actions/upload-release-asset@v1.0.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ needs.create-release.outputs.upload_url }}
           asset_path: target/x86_64-unknown-linux-gnu/release/evremap
-          asset_name: evremap-x86_64-unknown-linux-gnu
+          asset_name: evremap-${{ github.ref_name }}-x86_64-linux-gnu
           asset_content_type: application/octet-stream
 
-      - name: Upload aarch64 GNU binary
+      - name: Upload aarch64 binary
         uses: actions/upload-release-asset@v1.0.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ needs.create-release.outputs.upload_url }}
           asset_path: target/aarch64-unknown-linux-gnu/release/evremap
-          asset_name: evremap-aarch64-unknown-linux-gnu
+          asset_name: evremap-${{ github.ref_name }}-aarch64-linux-gnu
           asset_content_type: application/octet-stream
 
   build-musl:
     needs: create-release
     runs-on: ubuntu-latest
     container:
-      image: alpine:latest
+      image: rust:1.87.0-alpine3.22
     permissions:
       contents: write
     steps:
+      - name: Setup APK cache
+        uses: actions/cache@v3
+        with:
+          path: /var/cache/apk
+          key: alpine-apk-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+
       - name: Install build dependencies
         run: |
           apk add --no-cache \
             build-base \
-            cargo \
             git \
             linux-headers \
             libevdev-dev \
             pkgconfig \
-            aarch64-linux-musl-gcc
+            musl-dev \
+            gcc-aarch64-linux-musl \
+            openssl-dev \
+            perl
 
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl
-          components: rustfmt,clippy
+      - name: Calculate cache key
+        id: cache_key
+        run: echo "key=$(md5sum Cargo.lock | awk '{print $1}')" >> $GITHUB_OUTPUT
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "release-build-musl"
+          shared-key: "release-build-musl-${{ steps.cache_key.outputs.key }}"
           cache-on-failure: true
 
       - name: Build MUSL targets
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: true
-          RUSTFLAGS: "-C opt-level=3 -C embed-bitcode=yes"
+          # Updated flags for Rust 1.87
+          RUSTFLAGS: "-C opt-level=3 -C embed-bitcode=yes -C target-feature=+crt-static -C codegen-units=1 -C panic=abort"
         run: |
           # Build MUSL targets
           cargo build --verbose --release --target x86_64-unknown-linux-musl --jobs $(nproc)
@@ -145,24 +165,29 @@ jobs:
           strip target/x86_64-unknown-linux-musl/release/evremap
           aarch64-linux-musl-strip target/aarch64-unknown-linux-musl/release/evremap
 
-      - name: Upload x86_64 MUSL binary
+      - name: Verify static linking
+        run: |
+          file target/x86_64-unknown-linux-musl/release/evremap | grep "statically linked"
+          file target/aarch64-unknown-linux-musl/release/evremap | grep "statically linked"
+
+      - name: Upload binaries
         uses: actions/upload-release-asset@v1.0.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ needs.create-release.outputs.upload_url }}
           asset_path: target/x86_64-unknown-linux-musl/release/evremap
-          asset_name: evremap-x86_64-unknown-linux-musl
+          asset_name: evremap-${{ github.ref_name }}-x86_64-linux-musl-static
           asset_content_type: application/octet-stream
 
-      - name: Upload aarch64 MUSL binary
+      - name: Upload aarch64 binary
         uses: actions/upload-release-asset@v1.0.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ needs.create-release.outputs.upload_url }}
           asset_path: target/aarch64-unknown-linux-musl/release/evremap
-          asset_name: evremap-aarch64-unknown-linux-musl
+          asset_name: evremap-${{ github.ref_name }}-aarch64-linux-musl-static
           asset_content_type: application/octet-stream
 
   create-source-archives:
@@ -179,17 +204,17 @@ jobs:
       - name: Create source archives
         run: |
           mkdir -p target/source
-          git archive --format=tar.gz -o target/source/evremap-${{ github.ref_name }}.tar.gz HEAD
-          git archive --format=zip -o target/source/evremap-${{ github.ref_name }}.zip HEAD
+          git archive --format=tar.gz -o target/source/evremap-${{ github.ref_name }}-source.tar.gz HEAD
+          git archive --format=zip -o target/source/evremap-${{ github.ref_name }}-source.zip HEAD
 
-      - name: Upload source archives
+      - name: Upload archives
         uses: actions/upload-release-asset@v1.0.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: target/source/evremap-${{ github.ref_name }}.tar.gz
-          asset_name: evremap-${{ github.ref_name }}.tar.gz
+          asset_path: target/source/evremap-${{ github.ref_name }}-source.tar.gz
+          asset_name: evremap-${{ github.ref_name }}-source.tar.gz
           asset_content_type: application/gzip
 
       - name: Upload zip archive
@@ -198,6 +223,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: target/source/evremap-${{ github.ref_name }}.zip
-          asset_name: evremap-${{ github.ref_name }}.zip
+          asset_path: target/source/evremap-${{ github.ref_name }}-source.zip
+          asset_name: evremap-${{ github.ref_name }}-source.zip
           asset_content_type: application/zip
