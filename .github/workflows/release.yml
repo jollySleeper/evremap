@@ -9,32 +9,74 @@ on:
 jobs:
   build-push:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      upload_url: ${{ steps.create-release.outputs.upload_url }}
     
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Rust setup
-        uses: actions-rs/toolchain@v1
         with:
-          toolchain: stable
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu,x86_64-unknown-linux-musl,aarch64-unknown-linux-musl
+          components: rustfmt,clippy
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "release-build"
+          cache-on-failure: true
 
       - name: Install Linux Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libevdev-dev pkg-config
+          sudo apt-get install -y libevdev-dev pkg-config musl-tools gcc-aarch64-linux-gnu musl-dev
+          sudo ln -s /usr/bin/aarch64-linux-gnu-gcc /usr/bin/aarch64-linux-musl-gcc
 
       - name: Run tests
-        run: cargo test --verbose
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: true
+          RUSTFLAGS: "-C target-cpu=native -C opt-level=3"
+        run: cargo test --verbose --release --all-features --jobs $(nproc)
 
-      - name: Build x86_64-unknown-linux-gnu
-        run: cargo build --verbose --release --target x86_64-unknown-linux-gnu
-
-      - name: Build aarch64-unknown-linux-gnu
+      - name: Build all targets
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: true
+          RUSTFLAGS: "-C opt-level=3 -C lto=thin"
         run: |
-          sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
-          rustup target add aarch64-unknown-linux-gnu
-          cargo build --verbose --release --target aarch64-unknown-linux-gnu --config target.aarch64-unknown-linux-gnu.linker=\"aarch64-linux-gnu-gcc\"
+          # Build GNU targets
+          cargo build --verbose --release --target x86_64-unknown-linux-gnu --jobs $(nproc)
+          cargo build --verbose --release --target aarch64-unknown-linux-gnu --jobs $(nproc) --config target.aarch64-unknown-linux-gnu.linker=\"aarch64-linux-gnu-gcc\"
+          
+          # Build MUSL targets (static binaries)
+          cargo build --verbose --release --target x86_64-unknown-linux-musl --jobs $(nproc)
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-musl-gcc \
+          cargo build --verbose --release --target aarch64-unknown-linux-musl --jobs $(nproc)
+
+      - name: Strip binaries
+        run: |
+          # Strip GNU binaries
+          strip target/x86_64-unknown-linux-gnu/release/evremap
+          aarch64-linux-gnu-strip target/aarch64-unknown-linux-gnu/release/evremap
+          
+          # Strip MUSL binaries
+          strip target/x86_64-unknown-linux-musl/release/evremap
+          aarch64-linux-gnu-strip target/aarch64-unknown-linux-musl/release/evremap
+
+      - name: Archive source code as tar.gz
+        run: |
+          mkdir -p target/source
+          git archive --format=tar.gz -o target/source/evremap-${{ github.ref_name }}.tar.gz HEAD
+
+      - name: Archive source code as zip
+        run: |
+          mkdir -p target/source
+          git archive --format=zip -o target/source/evremap-${{ github.ref_name }}.zip HEAD
 
       - name: Create GitHub release
         id: create-release
@@ -42,14 +84,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: 'v0.0.1-pre-${{ github.sha }}'
-          release_name: Pre-Release v0.0.1
+          tag_name: ${{ github.ref_name }}
+          release_name: Release ${{ github.ref_name }}
           body: ''
           draft: false
-          prerelease: true
+          prerelease: false
 
-      - name: Upload binary to GitHub release
-        id: upload-x86_64-unknown-linux-gnu-release-asset
+      - name: Upload x86_64-unknown-linux-gnu binary
         uses: actions/upload-release-asset@v1.0.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -57,10 +98,9 @@ jobs:
           upload_url: ${{ steps.create-release.outputs.upload_url }}
           asset_path: target/x86_64-unknown-linux-gnu/release/evremap
           asset_name: evremap-x86_64-unknown-linux-gnu
-          asset_content_type: application/raw
+          asset_content_type: application/octet-stream
 
-      - name: Upload aarch64 linux binary to GitHub release
-        id: upload-aarch64-unknown-linux-gnu-release-asset
+      - name: Upload aarch64-unknown-linux-gnu binary
         uses: actions/upload-release-asset@v1.0.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -68,4 +108,44 @@ jobs:
           upload_url: ${{ steps.create-release.outputs.upload_url }}
           asset_path: target/aarch64-unknown-linux-gnu/release/evremap
           asset_name: evremap-aarch64-unknown-linux-gnu
-          asset_content_type: application/raw
+          asset_content_type: application/octet-stream
+
+      - name: Upload x86_64-unknown-linux-musl binary (static)
+        uses: actions/upload-release-asset@v1.0.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create-release.outputs.upload_url }}
+          asset_path: target/x86_64-unknown-linux-musl/release/evremap
+          asset_name: evremap-x86_64-unknown-linux-musl
+          asset_content_type: application/octet-stream
+
+      - name: Upload aarch64-unknown-linux-musl binary (static)
+        uses: actions/upload-release-asset@v1.0.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create-release.outputs.upload_url }}
+          asset_path: target/aarch64-unknown-linux-musl/release/evremap
+          asset_name: evremap-aarch64-unknown-linux-musl
+          asset_content_type: application/octet-stream
+
+      - name: Upload tar.gz source archive
+        uses: actions/upload-release-asset@v1.0.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create-release.outputs.upload_url }}
+          asset_path: target/source/evremap-${{ github.ref_name }}.tar.gz
+          asset_name: evremap-${{ github.ref_name }}.tar.gz
+          asset_content_type: application/gzip
+
+      - name: Upload zip source archive
+        uses: actions/upload-release-asset@v1.0.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create-release.outputs.upload_url }}
+          asset_path: target/source/evremap-${{ github.ref_name }}.zip
+          asset_name: evremap-${{ github.ref_name }}.zip
+          asset_content_type: application/zip
